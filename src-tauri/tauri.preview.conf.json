@@ -9,7 +9,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/Kryoto-Dev/kryoto-desktop/releases/download/preview/latest.json"
+        "https://github.com/Kiirb/kryoto-desktop/releases/download/preview/latest.json"
       ]
     }
   }

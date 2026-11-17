@@ -20,9 +20,14 @@ name: Release
 # its _PASSWORD) - Kryoto Desktop's own key, whose public half is
 # `plugins.updater.pubkey` in tauri.conf.json. Without it there is no latest.json and no installed copy
 # ever sees a new version, so the build refuses to run.
+#
+# Fork (Kiirb/kryoto-desktop): runs on `kiirb`, signs with the fork's own
+# updater key, and reuses upstream's release notes for the same version.
+# sync-upstream.yml merges each upstream release in, which is what bumps the
+# version here.
 on:
   push:
-    branches: [main]
+    branches: [kiirb]
     paths:
       - 'src-tauri/tauri.conf.json'
       - '.github/workflows/release.yml'
@@ -88,13 +93,20 @@ jobs:
               core.info(`Removing the leftover draft ${old.id} for ${tag}`);
               await github.rest.repos.deleteRelease({ owner, repo, release_id: old.id });
             }
+            // Upstream's notes for the same version, when it has a release for it.
+            let notes = `Kryoto Desktop ${version} for Windows and Linux.\n\nWhat changed is in the kryo.to changelog: https://kryo.to/changelog`;
+            try {
+              const up = await github.rest.repos.getReleaseByTag({ owner: 'Kryoto-Dev', repo: 'kryoto-desktop', tag });
+              if (up.data.body) notes = up.data.body;
+            } catch (e) { core.info(`No upstream release ${tag}; using the default notes.`); }
+            notes += `\n\n---\nBuilt from the ${owner}/${repo} fork (upstream ${tag} plus the fork's changes). Upstream release: https://github.com/Kryoto-Dev/kryoto-desktop/releases/tag/${tag}`;
             const { data } = await github.rest.repos.createRelease({
               owner,
               repo,
               tag_name: tag,
               target_commitish: context.sha,
               name: `Kryoto Desktop ${version}`,
-              body: `Kryoto Desktop ${version} for Windows and Linux.\n\nWhat changed is in the kryo.to changelog: https://kryo.to/changelog`,
+              body: notes,
               draft: true,
               prerelease: false,
             });
@@ -338,10 +350,10 @@ jobs:
             for (let attempt = 0; attempt < 90; attempt++) {
               const { data } = await github.rest.actions.listWorkflowRuns({
                 ...context.repo, workflow_id: 'ci.yml', head_sha: context.sha,
-                branch: 'main', per_page: 10,
+                branch: context.ref.replace('refs/heads/', ''), per_page: 10,
               });
               const run = data.workflow_runs.find(r => r.head_sha === context.sha
-                && r.head_branch === 'main'
+                && r.head_branch === context.ref.replace('refs/heads/', '')
                 && ['push', 'workflow_dispatch'].includes(r.event));
               if (run?.status === 'completed') {
                 if (run.conclusion !== 'success') {

@@ -7,7 +7,7 @@ name: CI
 # never compiled by a Linux-only check.
 on:
   push:
-    branches: [main]
+    branches: [main, kiirb]
   pull_request:
   workflow_dispatch:
 
