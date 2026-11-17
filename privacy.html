@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kryoto Desktop: Privacy policy</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Privacy policy</h1>
+  <p>For the Google Drive option in Kryoto Desktop. Last updated 18 November 2026.</p>
+
+  <h2>What Kryoto Desktop accesses</h2>
+  <p>
+    When you connect Google Drive, Kryoto Desktop asks Google for one permission,
+    <code>https://www.googleapis.com/auth/drive.file</code>. With it, the app can see and change
+    only the files and folders it created itself. It cannot see, read or change anything else in
+    your Drive.
+  </p>
+  <p>It also reads your Google account's email address, to show you which account is connected.</p>
+
+  <h2>What it stores, and where</h2>
+  <ul>
+    <li><strong>In your Google Drive</strong>, in a folder named <strong>Kryoto Saves</strong>: backups of your game
+      saves (<code>.ksave</code> files), a list of those backups (<code>index.json</code>) and your unlocked
+      achievements (<code>achievements.json</code>).</li>
+    <li><strong>On your PC</strong>: your Google account's email address, in Kryoto Desktop's settings, and the
+      sign-in Google gives the app, in your system's secure credential store (Windows Credential
+      Manager, or GNOME Keyring / KWallet on Linux).</li>
+  </ul>
+
+  <h2>What is shared</h2>
+  <p>
+    Nothing. Your data goes only between your PC and your own Google Drive. It is not sent to the
+    developer, to kryo.to or to anyone else, and it is not sold, used for advertising, or used to
+    train AI or machine learning models.
+  </p>
+  <p>
+    Kryoto Desktop's use and transfer of information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+    including the Limited Use requirements.
+  </p>
+
+  <h2>Removing your data</h2>
+  <ul>
+    <li>Press <strong>Disconnect</strong> in Kryoto Desktop's Settings &rarr; Cloud. This revokes the app's
+      access and deletes the sign-in from your PC.</li>
+    <li>You can also remove access at
+      <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+    <li>Delete the <strong>Kryoto Saves</strong> folder in Google Drive to remove the backups themselves.</li>
+  </ul>
+
+  <h2>Contact</h2>
+  <p>Questions: <a href="https://github.com/Kiirb/kryoto-desktop">github.com/Kiirb/kryoto-desktop</a>. The source code of this version of Kryoto Desktop is there too.</p>
+
+  <p><a href="index.html">Back</a></p>
+</main>
+</body>
+</html>
