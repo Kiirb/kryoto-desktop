@@ -118,20 +118,25 @@ pub struct Settings {
     /// instead of kryo.to. Empty is kryo.to.
     pub saves_endpoint: String,
     /// Where save versions are kept (saves/): `account` (kryo.to, a supporter
-    /// perk), `local` (a folder on this PC, `saves_local_dir`) or `patchbay`
+    /// perk), `local` (a folder on this PC, `saves_local_dir`), `gdrive` (a
+    /// Google Drive folder, `saves_gdrive_account`) or `patchbay`
     /// (`saves_endpoint`). Empty, as before there was a choice: the own server
     /// when one is set, else kryo.to.
     pub saves_mode: String,
     /// `local`: the folder save versions go in, the player's pick, apart from
     /// every cache.
     pub saves_local_dir: String,
-    /// `local`: versions kept per game, the newest ones.
+    /// `local` and `gdrive`: versions kept per game, the newest ones.
     pub saves_local_keep: u32,
+    /// `gdrive`: the Google account connected for save versions (its email),
+    /// empty when none is. Its sign-in is in the OS secure store, not here;
+    /// only connecting and disconnecting (saves/gdrive.rs) change it.
+    pub saves_gdrive_account: String,
     /// The card about kryo.to's cloud saves was closed: never shown again.
     pub saves_promo_closed: bool,
     /// Where achievements are kept (achievements_cloud.rs): `account`, `local`
-    /// (`achievements.json` in `saves_local_dir`) or `patchbay`; empty as
-    /// `saves_mode`.
+    /// (`achievements.json` in `saves_local_dir`), `gdrive` (the same file in
+    /// the Google Drive's Kryoto Saves folder) or `patchbay`; empty as `saves_mode`.
     pub achievements_mode: String,
     /// Patchbay: the same for achievements.
     pub achievements_endpoint: String,
@@ -292,6 +297,7 @@ impl Default for Settings {
             saves_mode: String::new(),
             saves_local_dir: String::new(),
             saves_local_keep: 10,
+            saves_gdrive_account: String::new(),
             saves_promo_closed: false,
             achievements_mode: String::new(),
             achievements_endpoint: String::new(),
@@ -571,11 +577,11 @@ pub fn settings_save(app: AppHandle, mut settings: Settings) -> Result<Settings,
         settings.cloud_saves_find = "precise".into();
     }
     settings.cloud_saves_keep_local = settings.cloud_saves_keep_local.clamp(1, 20);
-    if !matches!(settings.saves_mode.as_str(), "" | "account" | "local" | "patchbay") {
+    if !matches!(settings.saves_mode.as_str(), "" | "account" | "local" | "patchbay" | "gdrive") {
         settings.saves_mode = String::new();
     }
     settings.saves_local_dir = settings.saves_local_dir.trim().to_string();
-    if !matches!(settings.achievements_mode.as_str(), "" | "account" | "local" | "patchbay") {
+    if !matches!(settings.achievements_mode.as_str(), "" | "account" | "local" | "patchbay" | "gdrive") {
         settings.achievements_mode = String::new();
     }
     if settings.achievements_mode == "patchbay" && settings.achievements_endpoint.is_empty() {
@@ -588,6 +594,11 @@ pub fn settings_save(app: AppHandle, mut settings: Settings) -> Result<Settings,
         if settings.saves_local_dir != before.saves_local_dir {
             std::fs::create_dir_all(&settings.saves_local_dir).map_err(|e| format!("Cannot use {} for saves: {e}", settings.saves_local_dir))?;
         }
+    }
+    // Connecting and disconnecting Google Drive own this, not the page's copy.
+    settings.saves_gdrive_account = before.saves_gdrive_account.clone();
+    if (settings.saves_mode == "gdrive" || settings.achievements_mode == "gdrive") && settings.saves_gdrive_account.is_empty() {
+        return Err("Connect a Google account first.".into());
     }
     if settings.saves_mode == "patchbay" && settings.saves_endpoint.is_empty() {
         return Err("Add your saves server in Settings > Patchbay first.".into());

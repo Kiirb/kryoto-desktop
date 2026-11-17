@@ -7,7 +7,7 @@ import type { Settings } from '@/lib/settings'
 import { openGame, openStorePage } from '@/lib/window'
 import { KryotoCloudCard, SavePlace } from '@/settings/SavePlace'
 
-type AchievementsStatus = { perk: boolean | null; games: number; lastSync: number | null; endpoint?: string | null; mode?: 'account' | 'local' | 'patchbay'; localDir?: string | null }
+type AchievementsStatus = { perk: boolean | null; games: number; lastSync: number | null; endpoint?: string | null; mode?: 'account' | 'local' | 'patchbay' | 'gdrive'; localDir?: string | null }
 
 /**
  * Settings > Cloud: achievements and saves side by side, and where each is
@@ -81,7 +81,7 @@ export function CloudPane({ s, set, onManage }: { s: Settings; set: <K extends k
             <>
               <AsciiBar fraction={Math.min(1, used / total)} cells={24} />
               <Caption>
-                {status?.mode === 'local' ? 'On this PC · ' : status?.endpoint ? `${status.endpoint} · ` : ''}
+                {status?.mode === 'local' ? 'On this PC · ' : status?.mode === 'gdrive' ? 'Google Drive · ' : status?.endpoint ? `${status.endpoint} · ` : ''}
                 {formatBytes(used)} of {formatBytes(total)} · {status?.usage?.games ?? 0} game{status?.usage?.games === 1 ? "" : "s"} · synced {formatAgo(status?.lastSync)}
               </Caption>
             </>
@@ -92,10 +92,10 @@ export function CloudPane({ s, set, onManage }: { s: Settings; set: <K extends k
       </div>
       {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
 
-      <Section title="Where your saves are kept" hint="Versions of each game's saves, to go back to any of them. On this PC and on your own server they are free for everyone.">
+      <Section title="Where your saves are kept" hint="Versions of each game's saves, to go back to any of them. On this PC, in your Google Drive and on your own server they are free for everyone.">
         <SavePlace what="saves" />
       </Section>
-      <Section title="Where your achievements are kept" hint="Unlocked achievements, put back into a game that lost them (a reinstall, another copy). They go in the same folder as your saves when kept on this PC.">
+      <Section title="Where your achievements are kept" hint="Unlocked achievements, put back into a game that lost them (a reinstall, another copy). They go in the same folder as your saves when kept on this PC or in Google Drive.">
         <SavePlace what="achievements" />
       </Section>
       <KryotoCloudCard />

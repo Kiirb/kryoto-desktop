@@ -20,6 +20,10 @@
 //! Kept on this PC instead (Settings > Cloud), for everyone: the same
 //! exchange with a file in the player's own folder (`local_round`), so
 //! achievements survive reinstalling a game or the whole library.
+//!
+//! Or in the player's Google Drive (saves/gdrive.rs), for everyone: the same
+//! `achievements.json`, in the Kryoto Saves folder beside the save versions
+//! (`gdrive_round`), so every PC signed in to the same Google account shares them.
 
 use kryoto_repair::achievements::{self as ach, Roots};
 use serde::{Deserialize, Serialize};
@@ -67,6 +71,8 @@ pub(crate) enum Target {
     Local(PathBuf),
     /// The player's own server (Settings > Patchbay).
     Own(crate::patchbay::Own),
+    /// `achievements.json` in the player's Google Drive, by the account's email.
+    GDrive(String),
 }
 
 /// Settings' choice (`achievements_mode`); before there was one, an own server
@@ -75,6 +81,7 @@ pub(crate) fn target<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Target {
     let s = crate::settings::load(app);
     match s.achievements_mode.as_str() {
         "local" if !s.saves_local_dir.trim().is_empty() => Target::Local(PathBuf::from(s.saves_local_dir.trim())),
+        "gdrive" if !s.saves_gdrive_account.is_empty() => Target::GDrive(s.saves_gdrive_account.clone()),
         "account" => Target::Account,
         _ => crate::patchbay::achievements(app).map(Target::Own).unwrap_or(Target::Account),
     }
@@ -86,6 +93,7 @@ fn ledger_key(t: &Target) -> Option<String> {
         Target::Account => None,
         Target::Local(dir) => Some(format!("local-{}", crate::patchbay::ledger_key(&dir.to_string_lossy()))),
         Target::Own(own) => Some(crate::patchbay::ledger_key(&own.base)),
+        Target::GDrive(email) => Some(format!("gdrive-{}", crate::patchbay::ledger_key(&email.to_lowercase()))),
     }
 }
 
@@ -331,7 +339,7 @@ pub struct Status {
     last_sync: Option<u64>,
     /// The player's own server (Settings > Patchbay), by host; none for kryo.to.
     endpoint: Option<String>,
-    /// Where they are kept: `account`, `local` or `patchbay`.
+    /// Where they are kept: `account`, `local`, `gdrive` or `patchbay`.
     mode: &'static str,
     /// `local`: the folder.
     local_dir: Option<String>,
@@ -346,6 +354,7 @@ fn with_place(app: &AppHandle, s: Status) -> Status {
         Target::Account => s,
         Target::Local(dir) => Status { mode: "local", local_dir: Some(dir.to_string_lossy().into_owned()), perk: Some(true), ..s },
         Target::Own(own) => Status { mode: "patchbay", endpoint: Some(own.host), ..s },
+        Target::GDrive(_) => Status { mode: "gdrive", perk: Some(true), ..s },
     }
 }
 
@@ -355,6 +364,7 @@ fn where_kept(app: &AppHandle) -> String {
         Target::Account => "your kryo.to account".into(),
         Target::Local(dir) => dir.to_string_lossy().into_owned(),
         Target::Own(own) => own.host,
+        Target::GDrive(_) => "your Google Drive".into(),
     }
 }
 
@@ -407,14 +417,44 @@ pub(crate) fn local_round(app: &AppHandle, dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("Could not use {}: {e}", dir.display()))?;
     let file = dir.join(LOCAL_FILE);
     let mut store: BTreeMap<String, LocalGame> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    let saved = local_take(&mut store, &pending.games);
-    if !saved.is_empty() {
+    let report = exchange(&mut store, pending);
+    if !report.saved.is_empty() {
         crate::saves::write_json(&file, &store)?;
     }
-    let fetched = pending.fetch.iter().map(|id| (id.clone(), store.get(id).map(|g| g.unlocks.clone()).unwrap_or_default())).collect();
-    let report = Report { perk: Some(true), sent: pending.games, saved, fetched };
     let running = app.state::<Running>();
     apply(app, &running, report).map(|_| ())
+}
+
+/// A round against the store as a server would answer it: this PC's new
+/// unlocks go in, the fetched games' unlocks come back. Pure, for the tests.
+fn exchange(store: &mut BTreeMap<String, LocalGame>, pending: Pending) -> Report {
+    let saved = local_take(store, &pending.games);
+    let fetched = pending.fetch.iter().map(|id| (id.clone(), store.get(id).map(|g| g.unlocks.clone()).unwrap_or_default())).collect();
+    Report { perk: Some(true), sent: pending.games, saved, fetched }
+}
+
+/// One round with `achievements.json` in the Google Drive's Kryoto Saves
+/// folder: as `local_round`, over the network. Nothing is sent when nothing
+/// is new and no game is due to be fetched again.
+pub(crate) async fn gdrive_round(app: &AppHandle, email: &str) -> Result<(), String> {
+    let account = ledger_key(&Target::GDrive(email.to_string()));
+    let a = app.clone();
+    let pending = tauri::async_runtime::spawn_blocking(move || pending_for(&a, account)).await.map_err(|e| e.to_string())??;
+    if pending.games.is_empty() && pending.fetch.is_empty() {
+        return Ok(());
+    }
+    let report = crate::saves::gdrive::update_json(email, LOCAL_FILE, |store: &mut BTreeMap<String, LocalGame>| {
+        let report = exchange(store, pending);
+        (!report.saved.is_empty(), report)
+    })
+    .await?;
+    let a = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let running = a.state::<Running>();
+        apply(&a, &running, report).map(|_| ())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// For the Library's achievements card.
@@ -447,6 +487,25 @@ mod tests {
         // Only Steam AppIDs: nothing that could be a path.
         assert!(local_take(&mut store, &[game("../x", vec![unlock("A", 1)])]).is_empty());
         assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_round_saves_what_is_new_and_brings_back_what_another_pc_saved() {
+        let unlock = |name: &str| CloudUnlock { name: name.into(), unlocked_at: Some(1) };
+        // Another PC already put Hades' A in the shared file (a Drive's, a folder's).
+        let mut store = BTreeMap::new();
+        store.insert("1145360".to_string(), LocalGame { title: "Hades".into(), unlocks: vec![unlock("A")] });
+        let pending = Pending {
+            games: vec![CloudGame { appid: "620".into(), slug: None, title: "Portal 2".into(), unlocks: vec![unlock("X")] }],
+            fetch: vec!["1145360".into(), "620".into()],
+        };
+        let report = exchange(&mut store, pending);
+        assert_eq!(report.saved, vec!["620".to_string()]);
+        assert_eq!(report.fetched["1145360"], vec![unlock("A")], "this PC gets the other PC's unlock back");
+        assert_eq!(report.fetched["620"], vec![unlock("X")]);
+        assert_eq!(store.len(), 2);
+        // Nothing new: nothing to write back to the Drive.
+        assert!(exchange(&mut store, Pending { games: Vec::new(), fetch: vec!["620".into()] }).saved.is_empty());
     }
 
     #[test]

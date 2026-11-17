@@ -16,7 +16,7 @@
 
 pub mod achievements;
 pub mod debrid;
-mod secrets;
+pub(crate) mod secrets;
 pub mod torbox;
 
 use serde::{Deserialize, Serialize};

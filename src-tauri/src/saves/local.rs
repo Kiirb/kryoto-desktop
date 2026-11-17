@@ -17,7 +17,7 @@ const MAX_BACKUP: u64 = 8 << 30;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-struct Game {
+pub(super) struct Game {
     aliases: Vec<String>,
     slug: Option<String>,
     title: String,
@@ -25,25 +25,123 @@ struct Game {
     versions: Vec<Version>,
 }
 
+/// `index.json`: every game's versions. Google Drive (gdrive.rs) keeps the
+/// same file beside its backups.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-struct Index {
+pub(super) struct Index {
     games: BTreeMap<String, Game>,
 }
 
 /// A backup announced by `prepare`, waiting for its bytes and its `claim`.
 #[derive(Debug, Clone)]
-struct Pending {
+pub(super) struct Pending {
     game_key: String,
     aliases: Vec<String>,
     slug: Option<String>,
     title: String,
-    size: u64,
-    sha256: String,
-    md5: String,
+    pub(super) size: u64,
+    pub(super) sha256: String,
+    pub(super) md5: String,
     machine: Option<String>,
     parent: Option<String>,
     manifest: Option<serde_json::Value>,
+}
+
+impl Index {
+    pub(super) fn used(&self) -> u64 {
+        self.games.values().flat_map(|g| &g.versions).map(|v| v.size).sum()
+    }
+
+    pub(super) fn head(&self, game_key: &str) -> Option<Version> {
+        self.games.get(game_key).and_then(|g| g.versions.first().cloned())
+    }
+
+    pub(super) fn find(&self, version_id: &str) -> Option<&Version> {
+        self.games.values().flat_map(|g| &g.versions).find(|v| v.id == version_id && id_ok(&v.id))
+    }
+
+    pub(super) fn list(&self, allowance: Allowance) -> List {
+        let games: Vec<CloudGame> = self
+            .games
+            .iter()
+            .map(|(k, g)| CloudGame {
+                game_key: k.clone(),
+                aliases: g.aliases.clone(),
+                slug: g.slug.clone(),
+                title: g.title.clone(),
+                bytes: g.versions.iter().map(|v| v.size).sum(),
+                versions: g.versions.clone(),
+            })
+            .collect();
+        let bytes = games.iter().map(|g| g.bytes).sum();
+        let usage = Usage { bytes, games: games.len() as u32, versions: games.iter().map(|g| g.versions.len() as u32).sum() };
+        List { perk: true, allowance, usage, games }
+    }
+
+    /// Refused when another PC backed up since this one's parent.
+    pub(super) fn check_parent(&self, p: &Pending) -> Result<(), ApiError> {
+        let head = self.head(&p.game_key);
+        if head.as_ref().map(|h| h.id.clone()) != p.parent {
+            return Err(ApiError::Conflict(head.map(Box::new)));
+        }
+        Ok(())
+    }
+
+    /// The arrived backup becomes the game's newest version; returns it and
+    /// the ids of the versions past the newest `keep`, now out of the index.
+    pub(super) fn commit(&mut self, upload_id: &str, p: Pending, keep: u32) -> Result<(Version, Vec<String>), ApiError> {
+        self.check_parent(&p)?;
+        let game = self.games.entry(p.game_key.clone()).or_default();
+        let version = Version {
+            id: upload_id.to_string(),
+            size: p.size,
+            sha256: p.sha256.to_ascii_lowercase(),
+            md5: p.md5,
+            file_count: p.manifest.as_ref().and_then(|m| m.get("files")).and_then(|f| f.as_array()).map(|f| f.len() as u64).unwrap_or(0),
+            machine: p.machine,
+            created_at: now(),
+            parent_id: p.parent,
+            manifest: p.manifest,
+        };
+        if !p.aliases.is_empty() {
+            game.aliases = p.aliases;
+        }
+        game.slug = p.slug.or(game.slug.take());
+        if !p.title.is_empty() {
+            game.title = p.title;
+        }
+        game.versions.insert(0, version.clone());
+        let keep = (keep as usize).max(1);
+        let dropped = game.versions.split_off(keep.min(game.versions.len())).into_iter().map(|v| v.id).collect();
+        Ok((version, dropped))
+    }
+}
+
+/// A `prepare` body checked: the backup's shape, its size against `max`.
+pub(super) fn pending_of(body: &serde_json::Value, max: u64) -> Result<Pending, ApiError> {
+    let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let game_key = s("gameKey").filter(|k| key_ok(k)).ok_or_else(|| ApiError::Other("Which game?".into()))?;
+    let size = body.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+    let sha256 = s("sha256").filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).ok_or_else(|| ApiError::Other("The backup has no checksum.".into()))?;
+    if size == 0 {
+        return Err(ApiError::Other("The backup is empty.".into()));
+    }
+    if size > max {
+        return Err(ApiError::TooBig("This backup is too big.".into()));
+    }
+    Ok(Pending {
+        aliases: body.get("aliases").and_then(|a| serde_json::from_value(a.clone()).ok()).unwrap_or_default(),
+        slug: s("slug"),
+        title: s("title").unwrap_or_default(),
+        size,
+        sha256,
+        md5: s("md5").unwrap_or_default(),
+        machine: s("machine"),
+        parent: s("parentVersion"),
+        manifest: body.get("manifest").cloned(),
+        game_key,
+    })
 }
 
 /// One writer at a time for the index, whichever store asks.
@@ -59,16 +157,16 @@ fn key_ok(k: &str) -> bool {
     !k.is_empty() && k.len() <= 200 && k.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
 }
 
-fn id_ok(id: &str) -> bool {
+pub(super) fn id_ok(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn now() -> u64 {
+pub(super) fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// A fresh id: unique per backup, never a path.
-fn new_id(game_key: &str) -> String {
+pub(super) fn new_id(game_key: &str) -> String {
     use sha2::Digest;
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -109,61 +207,21 @@ impl LocalStore {
 
     pub fn list(&self) -> Result<List, ApiError> {
         let index = self.read();
-        let games: Vec<CloudGame> = index
-            .games
-            .iter()
-            .map(|(k, g)| CloudGame {
-                game_key: k.clone(),
-                aliases: g.aliases.clone(),
-                slug: g.slug.clone(),
-                title: g.title.clone(),
-                bytes: g.versions.iter().map(|v| v.size).sum(),
-                versions: g.versions.clone(),
-            })
-            .collect();
-        let bytes = games.iter().map(|g| g.bytes).sum();
-        let usage = Usage { bytes, games: games.len() as u32, versions: games.iter().map(|g| g.versions.len() as u32).sum() };
-        Ok(List { perk: true, allowance: self.allowance(bytes), usage, games })
+        Ok(index.list(self.allowance(index.used())))
     }
 
     pub fn head(&self, game_key: &str) -> Result<Head, ApiError> {
         let index = self.read();
-        let used = index.games.values().flat_map(|g| &g.versions).map(|v| v.size).sum();
-        Ok(Head { perk: true, allowance: self.allowance(used), head: index.games.get(game_key).and_then(|g| g.versions.first().cloned()) })
+        Ok(Head { perk: true, allowance: self.allowance(index.used()), head: index.head(game_key) })
     }
 
     /// As a server's `prepare`: check the backup's shape and that this PC
     /// saw the newest version (else a conflict), then hand out where to put it.
     pub fn prepare(&self, body: serde_json::Value) -> Result<Prepared, ApiError> {
-        let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(str::to_string);
-        let game_key = s("gameKey").filter(|k| key_ok(k)).ok_or_else(|| ApiError::Other("Which game?".into()))?;
-        let size = body.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
-        let sha256 = s("sha256").filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).ok_or_else(|| ApiError::Other("The backup has no checksum.".into()))?;
-        if size == 0 {
-            return Err(ApiError::Other("The backup is empty.".into()));
-        }
-        if size > MAX_BACKUP {
-            return Err(ApiError::TooBig("This backup is too big.".into()));
-        }
-        let parent = s("parentVersion");
-        let head = self.read().games.get(&game_key).and_then(|g| g.versions.first().cloned());
-        if head.as_ref().map(|h| h.id.clone()) != parent {
-            return Err(ApiError::Conflict(head.map(Box::new)));
-        }
+        let pending = pending_of(&body, MAX_BACKUP)?;
+        self.read().check_parent(&pending)?;
         std::fs::create_dir_all(self.files()).map_err(io)?;
-        let id = new_id(&game_key);
-        let pending = Pending {
-            aliases: body.get("aliases").and_then(|a| serde_json::from_value(a.clone()).ok()).unwrap_or_default(),
-            slug: s("slug"),
-            title: s("title").unwrap_or_default(),
-            size,
-            sha256,
-            md5: s("md5").unwrap_or_default(),
-            machine: s("machine"),
-            parent,
-            manifest: body.get("manifest").cloned(),
-            game_key,
-        };
+        let id = new_id(&pending.game_key);
         PENDING.lock().map_err(|_| io("lock"))?.get_or_insert_with(HashMap::new).insert(id.clone(), pending);
         Ok(Prepared { url: Self::file_url(&self.files().join(format!("{id}.part")))?, upload_id: id, headers: HashMap::new() })
     }
@@ -187,35 +245,16 @@ impl LocalStore {
         }
         let _guard = INDEX.lock().map_err(|_| io("lock"))?;
         let mut index = self.read();
-        let game = index.games.entry(p.game_key.clone()).or_default();
-        let head = game.versions.first().cloned();
-        if head.as_ref().map(|h| h.id.clone()) != p.parent {
-            let _ = std::fs::remove_file(&part);
-            return Err(ApiError::Conflict(head.map(Box::new)));
-        }
-        std::fs::rename(&part, self.files().join(format!("{upload_id}.ksave"))).map_err(io)?;
-        let version = Version {
-            id: upload_id.to_string(),
-            size: p.size,
-            sha256: p.sha256.to_ascii_lowercase(),
-            md5: p.md5,
-            file_count: p.manifest.as_ref().and_then(|m| m.get("files")).and_then(|f| f.as_array()).map(|f| f.len() as u64).unwrap_or(0),
-            machine: p.machine,
-            created_at: now(),
-            parent_id: p.parent,
-            manifest: p.manifest,
+        let (version, dropped) = match index.commit(upload_id, p, self.keep) {
+            Ok(done) => done,
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                return Err(e);
+            }
         };
-        if !p.aliases.is_empty() {
-            game.aliases = p.aliases;
-        }
-        game.slug = p.slug.or(game.slug.take());
-        if !p.title.is_empty() {
-            game.title = p.title;
-        }
-        game.versions.insert(0, version.clone());
-        let keep = self.keep as usize;
-        for old in game.versions.split_off(keep.min(game.versions.len())) {
-            let _ = std::fs::remove_file(self.files().join(format!("{}.ksave", old.id)));
+        std::fs::rename(&part, self.files().join(format!("{upload_id}.ksave"))).map_err(io)?;
+        for old in dropped {
+            let _ = std::fs::remove_file(self.files().join(format!("{old}.ksave")));
         }
         self.write(&index)?;
         Ok(version)
@@ -223,7 +262,7 @@ impl LocalStore {
 
     pub fn link(&self, version_id: &str) -> Result<Link, ApiError> {
         let index = self.read();
-        let v = index.games.values().flat_map(|g| &g.versions).find(|v| v.id == version_id && id_ok(&v.id)).ok_or_else(|| ApiError::Other("No such backup.".into()))?;
+        let v = index.find(version_id).ok_or_else(|| ApiError::Other("No such backup.".into()))?;
         let file = self.files().join(format!("{}.ksave", v.id));
         if !file.is_file() {
             return Err(ApiError::Other(format!("That backup is not in {} any more.", self.dir.display())));

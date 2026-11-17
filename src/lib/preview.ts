@@ -522,7 +522,7 @@ const HANDLERS: Record<string, (a: Record<string, unknown>) => unknown> = {
   community_offer_add_shot: () => ({ shown: true, toVersion: '1.4.2', kryotoVersion: '1.4.0', playedSeconds: 720, needSeconds: 600, exitCode: 0, shots: ['shot.png'], autoShots: true, offerId: null, offerState: null, reasons: [] }),
   community_offer_send: () => ({ shown: true, toVersion: '1.4.2', kryotoVersion: '1.4.0', playedSeconds: 720, needSeconds: 600, exitCode: 0, shots: ['shot.png'], autoShots: true, offerId: '1', offerState: 'review', reasons: [] }),
   // Cloud saves (src-tauri saves/): one game with every kind of location, a conflict on another.
-  cloud_saves_status: () => ({ feature: true, on: true, perk: true, allowance: { totalBytes: GB, versionsPerGame: 5, maxBackupBytes: 100 * 1_048_576, maxRawBytes: 400 * 1_048_576 }, usage: { bytes: 214_000_000, games: 7, versions: 23 }, lastSync: now() - 300, conflicts: [], endpoint: ownHost('savesEndpoint'), mode: settings.savesMode === 'local' ? 'local' : ownHost('savesEndpoint') ? 'patchbay' : 'account', localDir: (settings.savesLocalDir as string) || null }),
+  cloud_saves_status: () => ({ feature: true, on: true, perk: true, allowance: { totalBytes: GB, versionsPerGame: 5, maxBackupBytes: 100 * 1_048_576, maxRawBytes: 400 * 1_048_576 }, usage: { bytes: 214_000_000, games: 7, versions: 23 }, lastSync: now() - 300, conflicts: [], endpoint: ownHost('savesEndpoint'), mode: settings.savesMode === 'local' ? 'local' : settings.savesMode === 'gdrive' ? 'gdrive' : ownHost('savesEndpoint') ? 'patchbay' : 'account', localDir: (settings.savesLocalDir as string) || null }),
   cloud_saves_refresh: () => HANDLERS.cloud_saves_status!({}),
   cloud_saves_library: () => games.slice(0, 4).map((g, i) => ({ id: g.id, title: g.title, lastBackupAt: i === 1 ? null : now() - i * 3600, conflict: i === 1, error: null, tooBig: i === 2 })),
   cloud_saves_game: (a) => {
@@ -578,7 +578,17 @@ const HANDLERS: Record<string, (a: Record<string, unknown>) => unknown> = {
   cloud_saves_restore: () => 'Saves restored. What was here before is kept under Versions, On this PC.',
   cloud_saves_restore_local: () => 'Saves put back from this PC\'s backup.',
   cloud_saves_answer: () => null,
-  cloud_achievements_status: () => ({ perk: true, games: 3, lastSync: Math.floor(Date.now() / 1000) - 120, endpoint: ownHost('achievementsEndpoint'), mode: settings.achievementsMode === 'local' ? 'local' : ownHost('achievementsEndpoint') ? 'patchbay' : 'account', localDir: (settings.savesLocalDir as string) || null }),
+  cloud_achievements_status: () => ({ perk: true, games: 3, lastSync: Math.floor(Date.now() / 1000) - 120, endpoint: ownHost('achievementsEndpoint'), mode: settings.achievementsMode === 'local' ? 'local' : settings.achievementsMode === 'gdrive' ? 'gdrive' : ownHost('achievementsEndpoint') ? 'patchbay' : 'account', localDir: (settings.savesLocalDir as string) || null }),
+  gdrive_connect: async (a) => {
+    await new Promise((r) => setTimeout(r, 1500))
+    Object.assign(settings, { savesGdriveAccount: 'preview@gmail.com', [a.what === 'achievements' ? 'achievementsMode' : 'savesMode']: 'gdrive' })
+    return 'preview@gmail.com'
+  },
+  gdrive_cancel: () => null,
+  gdrive_disconnect: () => {
+    Object.assign(settings, { savesGdriveAccount: '', savesMode: settings.savesMode === 'gdrive' ? '' : settings.savesMode, achievementsMode: settings.achievementsMode === 'gdrive' ? '' : settings.achievementsMode })
+    return null
+  },
   patchbay_status: () => ({ saves: { endpoint: (settings.savesEndpoint as string) || null, token: false }, achievements: { endpoint: (settings.achievementsEndpoint as string) || null, token: false }, debrid: (settings.debrid as string) || null, debridToken: false, torboxToken: false }),
   patchbay_set_token: (a) => ({
     saves: { endpoint: null, token: a.slot === 'saves' && !!a.token },

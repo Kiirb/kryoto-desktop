@@ -10,6 +10,8 @@
 //!
 //! With save versions kept on this PC (Settings > Cloud, local.rs), the same
 //! calls are answered from that folder, and nothing goes over the network.
+//! With them kept in Google Drive (gdrive.rs), they are answered from the
+//! player's own Drive.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -154,6 +156,8 @@ enum Auth {
     Own(crate::patchbay::Own),
     /// A folder on this PC.
     Local(super::local::LocalStore),
+    /// The player's Google Drive.
+    Drive(super::gdrive::DriveStore),
 }
 
 fn ua() -> &'static str {
@@ -183,6 +187,10 @@ impl Api {
                 let place = dir.to_string_lossy().into_owned();
                 return Ok(Api { http: crate::net::builder().build().unwrap_or_default(), base: String::new(), place, auth: Auth::Local(super::local::LocalStore::new(dir, keep)) });
             }
+            super::Target::GDrive(account) => {
+                let keep = crate::settings::load(app).saves_local_keep;
+                return Ok(Api { http: reqwest::Client::new(), base: String::new(), place: "Google Drive".into(), auth: Auth::Drive(super::gdrive::DriveStore::new(account, keep)) });
+            }
             super::Target::Account => {}
         }
         let base = crate::settings::catalog_endpoint(&crate::settings::load(app));
@@ -207,6 +215,7 @@ impl Api {
             Auth::Cookie(cookie) => req.header("cookie", cookie),
             Auth::Own(own) => crate::patchbay::authorize(req, own),
             Auth::Local(_) => return Err(ApiError::Other("Saves kept on this PC need no network.".into())),
+            Auth::Drive(_) => return Err(ApiError::Other("Google Drive is reached on its own.".into())),
         };
         let res = req.send().await.map_err(|e| ApiError::Other(format!("Could not reach {}: {e}", self.place)))?;
         let status = res.status().as_u16();
@@ -236,6 +245,9 @@ impl Api {
         if let Auth::Local(store) = &self.auth {
             return store.list();
         }
+        if let Auth::Drive(drive) = &self.auth {
+            return drive.list().await;
+        }
         let v = self.send(self.http.get(self.url("/api/saves"))).await?;
         serde_json::from_value(v).map_err(|e| ApiError::Other(e.to_string()))
     }
@@ -244,6 +256,9 @@ impl Api {
         if let Auth::Local(store) = &self.auth {
             return store.head(game_key);
         }
+        if let Auth::Drive(drive) = &self.auth {
+            return drive.head(game_key).await;
+        }
         let v = self.send(self.http.get(self.url("/api/saves")).query(&[("gameKey", game_key)])).await?;
         serde_json::from_value(v).map_err(|e| ApiError::Other(e.to_string()))
     }
@@ -251,6 +266,9 @@ impl Api {
     pub async fn prepare(&self, body: serde_json::Value) -> Result<Prepared, ApiError> {
         if let Auth::Local(store) = &self.auth {
             return store.prepare(body);
+        }
+        if let Auth::Drive(drive) = &self.auth {
+            return drive.prepare(body).await;
         }
         let v = self.send(self.http.post(self.url("/api/saves/prepare")).json(&body)).await?;
         let prepared: Prepared = serde_json::from_value(v).map_err(|e| ApiError::Other(e.to_string()))?;
@@ -262,6 +280,9 @@ impl Api {
         if let Auth::Local(store) = &self.auth {
             return store.claim(upload_id);
         }
+        if let Auth::Drive(drive) = &self.auth {
+            return drive.claim(upload_id).await;
+        }
         let v = self.send(self.http.post(self.url("/api/saves/claim")).json(&json!({ "uploadId": upload_id }))).await?;
         serde_json::from_value(v.get("version").cloned().unwrap_or_default()).map_err(|e| ApiError::Other(e.to_string()))
     }
@@ -270,6 +291,9 @@ impl Api {
         if let Auth::Local(store) = &self.auth {
             return store.link(version_id);
         }
+        if let Auth::Drive(drive) = &self.auth {
+            return drive.link(version_id).await;
+        }
         let v = self.send(self.http.post(self.url("/api/saves/link")).json(&json!({ "versionId": version_id }))).await?;
         let link: Link = serde_json::from_value(v).map_err(|e| ApiError::Other(e.to_string()))?;
         web_address(&link.url, &self.place)?;
@@ -277,8 +301,8 @@ impl Api {
     }
 
     pub async fn rules(&self, keys: &[String]) -> Result<HashMap<String, Vec<kryoto_saves::Rule>>, ApiError> {
-        // On this PC there are no other players' locations to learn from.
-        if matches!(self.auth, Auth::Local(_)) {
+        // On this PC or in a Drive there are no other players' locations to learn from.
+        if matches!(self.auth, Auth::Local(_) | Auth::Drive(_)) {
             return Ok(HashMap::new());
         }
         let v = self.send(self.http.get(self.url("/api/saves/rules")).query(&[("gameKeys", keys.join(","))])).await?;
@@ -290,7 +314,7 @@ impl Api {
 
     /// `traced`: Windows saw the game write these (precise finding).
     pub async fn report_rules(&self, game_key: &str, rules: &[kryoto_saves::Rule], traced: bool) -> Result<(), ApiError> {
-        if matches!(self.auth, Auth::Local(_)) {
+        if matches!(self.auth, Auth::Local(_) | Auth::Drive(_)) {
             return Ok(());
         }
         let rules: Vec<_> = rules.iter().take(20).map(|r| json!({ "kind": r.kind, "root": r.root, "path": r.path, "excludes": r.excludes, "source": "detected" })).collect();
@@ -373,16 +397,25 @@ fn counted(file: tokio::fs::File, sent: std::sync::Arc<impl Fn(u64) + Send + Syn
 /// Download a backup to `out`, refusing anything bigger than `max`.
 /// `on_got(bytes so far, bytes in all)` follows it.
 pub async fn download(url: &str, out: &Path, max: u64, on_got: impl Fn(u64, u64)) -> Result<(), String> {
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt;
     if let Some(src) = super::local::path_of(url) {
         let total = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
         return super::local::copy(&src, out, max, |done| on_got(done, total.max(done))).await.map(|_| ());
+    }
+    if let Some(id) = super::gdrive::file_of(url) {
+        return super::gdrive::download(id, out, max, on_got).await;
     }
     let res = storage_client().get(url).send().await.map_err(|e| format!("Could not download the backup: {}", crate::logging::why(&e)))?;
     if !res.status().is_success() {
         return Err(format!("Could not download the backup ({}).", res.status()));
     }
+    save_body(res, out, max, on_got).await
+}
+
+/// Write a download's body to `out` (through `.part`), refusing anything
+/// bigger than `max`.
+pub(crate) async fn save_body(res: reqwest::Response, out: &Path, max: u64, on_got: impl Fn(u64, u64)) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
     let tmp = out.with_extension("part");
     let total = res.content_length().unwrap_or(0);
     let mut f = tokio::fs::File::create(&tmp).await.map_err(|e| e.to_string())?;

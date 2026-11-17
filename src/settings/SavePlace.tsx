@@ -6,24 +6,28 @@ import { pickPath } from '@/lib/pick'
 import { settingsApi, useSettings, type KeptIn, type Settings } from '@/lib/settings'
 import { openSettingsSection, openStorePage } from '@/lib/window'
 import { library } from '@/lib/library'
+import { googleDrive } from '@/lib/cloud-saves'
 
 /**
  * Where save versions and achievements are kept, for everyone: in a folder on
- * this PC, on a server of your own (Settings > Cloud, Patchbay), or on the kryo.to
- * account, which is the supporter perk. The same versions, restore and
- * keep-N in all three (src-tauri saves/local.rs, achievements_cloud.rs).
+ * this PC, in your Google Drive, on a server of your own
+ * (Settings > Cloud, Patchbay), or on the kryo.to account, which is the
+ * supporter perk. The same versions, restore and keep-N in all of them
+ * (src-tauri saves/local.rs, saves/gdrive.rs, achievements_cloud.rs).
  *
  * Shown in Settings > Cloud and on a game's saves card.
  */
 
 type What = 'saves' | 'achievements'
 
-const LABEL: Record<KeptIn, string> = { local: 'On this PC', patchbay: 'My own server', account: 'kryo.to account' }
+const LABEL: Record<KeptIn, string> = { local: 'On this PC', gdrive: 'Google Drive', patchbay: 'My own server', account: 'kryo.to account' }
+const PLACES: readonly KeptIn[] = ['local', 'gdrive', 'patchbay', 'account']
 
 /** What Settings has now, with the blank of before there was a choice read the way the app reads it. */
 export function keptIn(s: Settings | null, what: What): KeptIn {
   const mode = what === 'saves' ? s?.savesMode : s?.achievementsMode
   if (mode === 'local' && s?.savesLocalDir) return 'local'
+  if (mode === 'gdrive' && s?.savesGdriveAccount) return 'gdrive'
   if (mode === 'account') return 'account'
   const endpoint = what === 'saves' ? s?.savesEndpoint : s?.achievementsEndpoint
   return endpoint ? 'patchbay' : 'account'
@@ -38,6 +42,8 @@ export function SavePlace({ what, compact = false }: { what: What; compact?: boo
   const s = useSettings()
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Signing in with Google: waiting for the browser to come back.
+  const [connecting, setConnecting] = useState(false)
   if (!s) return null
   const mode = keptIn(s, what)
   const key = what === 'saves' ? 'savesMode' : 'achievementsMode'
@@ -65,7 +71,24 @@ export function SavePlace({ what, compact = false }: { what: What; compact?: boo
     void run(async () => {
       if (next === 'local' && !s.savesLocalDir) return chooseFolder(true)
       if (next === 'patchbay' && !endpoint) return openSettingsSection('patchbay')
+      if (next === 'gdrive' && !s.savesGdriveAccount) return connectDrive()
       await save({ [key]: next })
+    })
+
+  const connectDrive = async () => {
+    setConnecting(true)
+    try {
+      await googleDrive.connect(what)
+    } finally {
+      setConnecting(false)
+      await settingsApi.reload().catch(() => {})
+    }
+  }
+
+  const disconnectDrive = () =>
+    void run(async () => {
+      await googleDrive.disconnect()
+      await settingsApi.reload()
     })
 
   return (
@@ -73,10 +96,30 @@ export function SavePlace({ what, compact = false }: { what: What; compact?: boo
       <Segmented
         label={what === 'saves' ? 'Where save versions are kept' : 'Where achievements are kept'}
         value={mode}
-        options={(['local', 'patchbay', 'account'] as const).map((v) => ({ value: v, label: LABEL[v] }))}
+        options={PLACES.map((v) => ({ value: v, label: LABEL[v] }))}
         onChange={pick}
       />
-      {mode === 'local' ? (
+      {connecting ? (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <Cloud className="size-3 shrink-0" aria-hidden />
+          <span className="grow">Sign in with Google in your browser, then come back here.</span>
+          <Button size="sm" variant="ghost" onClick={() => void googleDrive.cancel()}>
+            Cancel
+          </Button>
+        </div>
+      ) : mode === 'gdrive' ? (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <Cloud className="size-3 shrink-0" aria-hidden />
+          <span className="min-w-0 grow truncate" title={s.savesGdriveAccount}>
+            In the Kryoto Saves folder of <span className="text-foreground">{s.savesGdriveAccount}</span>'s Google Drive. Connect the same account on your other PCs.
+            {what === 'achievements' && keptIn(s, 'saves') === 'gdrive' ? ' Disconnecting stops your saves going there too.' : ''}
+            {what === 'saves' && keptIn(s, 'achievements') === 'gdrive' ? ' Disconnecting stops your achievements going there too.' : ''}
+          </span>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={disconnectDrive}>
+            Disconnect
+          </Button>
+        </div>
+      ) : mode === 'local' ? (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
           <HardDrive className="size-3 shrink-0" aria-hidden />
           <span className="min-w-0 truncate text-foreground" title={s.savesLocalDir}>
@@ -99,7 +142,7 @@ export function SavePlace({ what, compact = false }: { what: What; compact?: boo
           On your kryo.to account, back on any PC you sign in on. A supporter perk.
         </p>
       )}
-      {mode === 'local' && what === 'saves' && !compact ? (
+      {(mode === 'local' || mode === 'gdrive') && what === 'saves' && !compact ? (
         <Segmented
           label="Versions kept per game"
           value={String(s.savesLocalKeep ?? 10)}

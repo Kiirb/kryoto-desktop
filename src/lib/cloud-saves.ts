@@ -18,10 +18,20 @@ export type CloudSavesStatus = {
   conflicts: string[]
   /** Your own server (Settings > Cloud, Patchbay), by host; none for kryo.to. */
   endpoint?: string | null
-  /** Where versions are kept: the kryo.to account, a folder on this PC, or your own server. */
-  mode?: 'account' | 'local' | 'patchbay'
+  /** Where versions are kept: the kryo.to account, a folder on this PC, Google Drive, or your own server. */
+  mode?: 'account' | 'local' | 'patchbay' | 'gdrive'
   /** On this PC: the folder. */
   localDir?: string | null
+}
+
+/** Google Drive for save versions (src-tauri saves/gdrive.rs). */
+export const googleDrive = {
+  /** Sign in with Google in the browser and keep `what` there; resolves with the account's email once connected. */
+  connect: (what: 'saves' | 'achievements' = 'saves') => call<string>('gdrive_connect', { what }),
+  /** Stop a sign-in still waiting for the browser. */
+  cancel: () => call<void>('gdrive_cancel'),
+  /** Forget the account, for saves and achievements both. What is in the Drive stays there. */
+  disconnect: () => call<void>('gdrive_disconnect'),
 }
 
 export type SaveSource = 'player' | 'emulator' | 'engine' | 'known' | 'community' | 'staff' | 'detected'

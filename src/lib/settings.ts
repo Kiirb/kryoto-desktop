@@ -105,8 +105,10 @@ export type Settings = {
   savesMode?: '' | KeptIn
   /** On this PC: the folder for save versions and achievements, apart from caches. */
   savesLocalDir?: string
-  /** On this PC: versions kept per game. */
+  /** On this PC and in Google Drive: versions kept per game. */
   savesLocalKeep?: number
+  /** Google Drive: the connected account's email, blank when none. Only connecting and disconnecting change it. */
+  savesGdriveAccount?: string
   /** The card about kryo.to's cloud saves was closed for good. */
   savesPromoClosed?: boolean
   /** Where achievements are kept, the same three places. */
@@ -313,7 +315,8 @@ export const displayApi = {
 }
 
 /** Where saves or achievements are kept: kryo.to, this PC, or your own server. */
-export type KeptIn = 'account' | 'local' | 'patchbay'
+/** Where save versions and achievements are kept. */
+export type KeptIn = 'account' | 'local' | 'patchbay' | 'gdrive'
 
 let changing: Promise<unknown> = Promise.resolve()
 

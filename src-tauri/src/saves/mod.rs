@@ -16,6 +16,7 @@
 //! kept apart per place, so switching between them, and back, mixes nothing.
 
 pub mod api;
+pub mod gdrive;
 mod known;
 pub(crate) mod local;
 pub mod precise;
@@ -96,6 +97,9 @@ pub(crate) enum Target {
     Local(PathBuf),
     /// The player's own server (Settings > Patchbay).
     Own(crate::patchbay::Own),
+    /// A `Kryoto Saves` folder in the player's Google Drive (gdrive.rs), by
+    /// the account's email.
+    GDrive(String),
 }
 
 /// Settings' choice (`saves_mode`). Before there was one, an own server set
@@ -104,6 +108,7 @@ pub(crate) fn target<R: Runtime>(app: &AppHandle<R>) -> Target {
     let s = crate::settings::load(app);
     match s.saves_mode.as_str() {
         "local" if !s.saves_local_dir.trim().is_empty() => Target::Local(PathBuf::from(s.saves_local_dir.trim())),
+        "gdrive" if !s.saves_gdrive_account.is_empty() => Target::GDrive(s.saves_gdrive_account.clone()),
         "account" => Target::Account,
         _ => crate::patchbay::saves(app).map(Target::Own).unwrap_or(Target::Account),
     }
@@ -116,12 +121,15 @@ pub(crate) fn where_kept<R: Runtime>(app: &AppHandle<R>) -> String {
         Target::Account => "your kryo.to account".into(),
         Target::Local(dir) => dir.to_string_lossy().into_owned(),
         Target::Own(o) => o.host,
+        Target::GDrive(_) => "your Google Drive".into(),
     }
 }
 
 /// The ledger name for the local place: one per folder, so pointing it at
 /// another folder starts that folder's own history.
 pub(crate) const LOCAL_PLACE: &str = "local";
+/// The ledger name for Google Drive: one per Google account.
+pub(crate) const GDRIVE_PLACE: &str = "gdrive";
 
 /// Where saves go: `""` for kryo.to, `local-<key>` for a folder on this PC,
 /// or the own server's ledger key.
@@ -130,6 +138,7 @@ pub(crate) fn place<R: Runtime>(app: &AppHandle<R>) -> String {
         Target::Account => String::new(),
         Target::Local(dir) => format!("{LOCAL_PLACE}-{}", crate::patchbay::ledger_key(&dir.to_string_lossy())),
         Target::Own(o) => crate::patchbay::ledger_key(&o.base),
+        Target::GDrive(email) => format!("{GDRIVE_PLACE}-{}", crate::patchbay::ledger_key(&email.to_lowercase())),
     }
 }
 
@@ -150,7 +159,7 @@ pub(crate) fn account<R: Runtime>(app: &AppHandle<R>) -> Account {
         // A folder on this PC or the player's own server: no kryo.to flag or
         // account involved. The name keeps each game's sync state tied to it.
         if !place.is_empty() {
-            a.username = Some(if place.starts_with(LOCAL_PLACE) { place.clone() } else { format!("patchbay:{place}") });
+            a.username = Some(if place.starts_with(LOCAL_PLACE) || place.starts_with(GDRIVE_PLACE) { place.clone() } else { format!("patchbay:{place}") });
             a.feature = true;
         }
         *slot = Some((place, a));
@@ -536,7 +545,7 @@ pub struct Status {
     pub conflicts: Vec<String>,
     /// The player's own server (Settings > Patchbay), by host; none for kryo.to.
     pub endpoint: Option<String>,
-    /// Where versions are kept: `account`, `local` or `patchbay`.
+    /// Where versions are kept: `account`, `local`, `gdrive` or `patchbay`.
     pub mode: &'static str,
     /// `local`: the folder.
     pub local_dir: Option<String>,
@@ -565,6 +574,7 @@ pub(crate) fn status_of<R: Runtime>(app: &AppHandle<R>, a: &Account) -> Status {
             Target::Account => "account",
             Target::Local(_) => "local",
             Target::Own(_) => "patchbay",
+            Target::GDrive(_) => "gdrive",
         },
         local_dir: match target(app) {
             Target::Local(dir) => Some(dir.to_string_lossy().into_owned()),

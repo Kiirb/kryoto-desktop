@@ -38,6 +38,12 @@ pub fn start(app: AppHandle) {
                         crate::logging::warn("achievements", &e);
                     }
                 }
+                // In Google Drive: the same round with a file there.
+                achievements_cloud::Target::GDrive(email) => {
+                    if let Err(e) = achievements_cloud::gdrive_round(&app, &email).await {
+                        crate::logging::warn("achievements", &format!("Google Drive: {e}"));
+                    }
+                }
                 achievements_cloud::Target::Account => {}
             }
             let _ = tokio::time::timeout(Duration::from_secs(30), WAKE.notified()).await;
