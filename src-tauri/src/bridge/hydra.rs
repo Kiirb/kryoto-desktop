@@ -2,7 +2,7 @@
 //! never writes a file of Hydra's. Hydra hands its games over: a game Kryoto
 //! has becomes a Kryoto game, and its saves follow as versions.
 
-use super::{env_path, BroughtOver, Incoming, Provider, ReadProblem};
+use super::{env_path, BroughtOver, Following, Incoming, Provider, ReadProblem};
 use kryoto_import::hydra::{self as hy, HydraGame};
 use kryoto_import::leveldb::ReadError;
 use std::path::{Path, PathBuf};
@@ -89,9 +89,9 @@ impl Provider for Hydra {
     /// Their saves, as versions at once: Hydra's own backup first (only read),
     /// then what is on this PC now. Achievements need nothing: they live in
     /// the emulators' own files, which the next round reads.
-    fn brought_over(&self, app: &AppHandle, dir: &Path, games: Vec<BroughtOver>) -> bool {
+    fn brought_over(&self, app: &AppHandle, dir: &Path, games: Vec<BroughtOver>) -> Following {
         if games.is_empty() || !crate::saves::enabled(app) {
-            return false;
+            return Following::default();
         }
         let backups = dir.parent().map(|d| d.join("Backups"));
         let jobs: Vec<(String, String, Option<PathBuf>)> = games
@@ -106,7 +106,7 @@ impl Provider for Hydra {
         tauri::async_runtime::spawn(async move {
             let mut kept = Vec::new();
             for (id, title, backup) in jobs {
-                match crate::saves::bring_from_hydra(&app, &id, backup).await {
+                match crate::saves::bring_over(&app, &id, backup).await {
                     Ok(n) if n > 0 => kept.push(title),
                     Ok(_) => {}
                     Err(e) => crate::logging::warn("hydra", &format!("{title}: saves not kept: {e}")),
@@ -117,6 +117,6 @@ impl Provider for Hydra {
                 let _ = app.emit("notify", crate::downloads::Notice::new("Saves brought over", &body, None));
             }
         });
-        true
+        Following { saves: true, note: Some("Hydra's own backups of them come along too.".into()) }
     }
 }

@@ -1114,7 +1114,7 @@ pub(crate) fn dir_size(path: &Path) -> u64 {
 
 /// Where a game's Wine prefix lives, whether or not it has one yet. An id is
 /// checked, because this path gets deleted.
-fn prefix_root<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<PathBuf, String> {
+pub(crate) fn prefix_root<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<PathBuf, String> {
     if !is_prefix_name(id) {
         return Err("Not a game.".into());
     }

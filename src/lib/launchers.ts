@@ -44,7 +44,16 @@ export type BridgeScan = { dir: string | null; running: boolean; catalog: boolea
 /** What a row becomes: a kryo.to game, or the player's own (`slug: null`). */
 export type BridgeDecision = { key: string; slug: string | null }
 
-export type BridgeImported = { linked: number; own: number; joined: number; seconds: number; /** Save versions are on: the games' saves are being kept now. */ saves: boolean }
+export type BridgeImported = {
+  linked: number
+  own: number
+  joined: number
+  seconds: number
+  /** Save versions are on: the games' saves are being kept now. */
+  saves: boolean
+  /** What else is still coming over, from that launcher (its own backups, Wine prefixes). */
+  note: string | null
+}
 
 export type ExportGame = { id: string; title: string; cover: string | null; nsfw: boolean; /** Already there, from an earlier send. */ sent: boolean }
 

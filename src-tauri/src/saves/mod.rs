@@ -35,7 +35,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::library::LibraryGame;
 
-pub use sync::{after_exit, before_launch, bring_from_hydra, catch_up};
+pub use sync::{after_exit, before_launch, bring_over, catch_up};
 
 pub(crate) fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)

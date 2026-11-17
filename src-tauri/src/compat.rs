@@ -265,6 +265,57 @@ pub fn detect<R: Runtime>(app: &AppHandle<R>) -> Vec<CompatTool> {
     detect_in(managed_dir(app).as_deref())
 }
 
+/// Another launcher's Proton (its `proton` script, or the folder holding
+/// it), when this setup has that same Proton already: the one here, so a game
+/// brought over does not run from the other launcher's copy. The same is
+/// the same folder, else the same `version` file (Proton's build stamp and
+/// name; a `GE-Proton-latest` copy has its build's), else, for a Proton
+/// without one, the same folder name. The client's own first, as `tools` lists them.
+pub fn installed_twin(other: &Path, tools: &[CompatTool]) -> Option<String> {
+    let dir = if other.is_dir() { other.to_path_buf() } else { other.parent()?.to_path_buf() };
+    if !dir.join("proton").is_file() {
+        return None;
+    }
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let version = |d: &Path| std::fs::read_to_string(d.join("version")).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let (mine, stamp) = (real(&dir), version(&dir));
+    let protons: Vec<(&CompatTool, PathBuf)> = tools.iter().filter(|t| t.kind == "proton").filter_map(|t| Some((t, Path::new(&t.path).parent()?.to_path_buf()))).collect();
+    let pick = |same: &dyn Fn(&Path) -> bool| protons.iter().find(|(_, d)| same(d)).map(|(t, _)| t.path.clone());
+    pick(&|d| real(d) == mine)
+        .or_else(|| stamp.as_ref().and_then(|s| pick(&|d| version(d).as_ref() == Some(s))))
+        .or_else(|| stamp.is_none().then(|| pick(&|d| version(d).is_none() && d.file_name() == dir.file_name())).flatten())
+}
+
+/// Which line of Proton builds one is, from its `version` file's name or its
+/// folder: `cachyos`, `ge`, `tkg`, `em`. None for Valve's own and anything
+/// else, which are never stood in for by another build.
+fn family_of(proton_dir: &Path) -> Option<&'static str> {
+    let stamp = std::fs::read_to_string(proton_dir.join("version")).unwrap_or_default();
+    let folder = proton_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = format!("{stamp} {folder}").to_ascii_lowercase();
+    [("cachyos", "cachyos"), ("ge-proton", "ge"), ("proton-ge", "ge"), ("tkg", "tkg"), ("proton-em", "em")].into_iter().find(|(mark, _)| name.contains(mark)).map(|(_, f)| f)
+}
+
+/// The build time in a Proton's `version` file (`<unix seconds> <name>`).
+fn build_stamp(proton_dir: &Path) -> u64 {
+    std::fs::read_to_string(proton_dir.join("version")).ok().and_then(|v| v.split_whitespace().next()?.parse().ok()).unwrap_or(0)
+}
+
+/// Another launcher's Proton, when this setup has no copy of that build but
+/// has one of the same line (another GE-Proton, another CachyOS): the newest
+/// of those here.
+pub fn installed_kin(other: &Path, tools: &[CompatTool]) -> Option<String> {
+    let dir = if other.is_dir() { other.to_path_buf() } else { other.parent()?.to_path_buf() };
+    let family = family_of(&dir)?;
+    tools
+        .iter()
+        .filter(|t| t.kind == "proton")
+        .filter_map(|t| Some((t, Path::new(&t.path).parent()?.to_path_buf())))
+        .filter(|(_, d)| family_of(d) == Some(family))
+        .max_by_key(|(t, d)| (build_stamp(d), natural_key(&t.name)))
+        .map(|(t, _)| t.path.clone())
+}
+
 /// What a tool is, from its path: Proton's `proton` script, `umu-run`, or Wine.
 pub fn kind_of(tool: &Path) -> &'static str {
     match tool.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()) {
@@ -665,6 +716,49 @@ pub async fn compat_remove(app: AppHandle, path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_launchers_proton_is_the_one_here_when_it_is_the_same() {
+        let root = std::env::temp_dir().join(format!("kryoto-twin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let proton = |at: &str, version: Option<&str>| {
+            let d = root.join(at);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("proton"), b"#!/usr/bin/env python3").unwrap();
+            if let Some(v) = version {
+                std::fs::write(d.join("version"), v).unwrap();
+            }
+            d.join("proton").to_string_lossy().into_owned()
+        };
+        let tool = |path: &str| CompatTool { name: String::new(), path: path.into(), kind: "proton".into(), managed: true };
+        let ge = proton("kryoto/GE-Proton11-3-x86_64", Some("1784963766 GE-Proton11-3\n"));
+        let cachy = proton("kryoto/cachyos", Some("1784295187 cachyos_11.0\n"));
+        let bare = proton("kryoto/Bare", None);
+        let tools = [tool(&cachy), tool(&ge), tool(&bare)];
+        // A renamed copy of the same build, by its script or its folder.
+        let latest = proton("heroic/GE-Proton-latest", Some("1784963766 GE-Proton11-3"));
+        assert_eq!(installed_twin(Path::new(&latest), &tools), Some(ge.clone()));
+        assert_eq!(installed_twin(&root.join("heroic/GE-Proton-latest"), &tools), Some(ge.clone()));
+        // The same file is itself.
+        assert_eq!(installed_twin(Path::new(&cachy), &tools), Some(cachy.clone()));
+        // A build this setup does not have: none, even with a name like one here.
+        let newer = proton("heroic/cachyos", Some("1784681208 cachyos-11.0-20260703-slr"));
+        assert_eq!(installed_twin(Path::new(&newer), &tools), None);
+        // No version file on either side: by folder name.
+        let bare2 = proton("heroic/Bare", None);
+        assert_eq!(installed_twin(Path::new(&bare2), &tools), Some(bare.clone()));
+        // Not a Proton at all.
+        assert_eq!(installed_twin(Path::new("/usr/bin/wine"), &tools), None);
+        // A build not here: the newest here of the same line, never another line.
+        let ge_old = proton("heroic/GE-Proton9-1", Some("1700000000 GE-Proton9-1"));
+        let ge_new = proton("kryoto/GE-Proton11-12-x86_64", Some("1793687165 GE-Proton11-12"));
+        let tools = [tool(&cachy), tool(&ge), tool(&ge_new), tool(&bare)];
+        assert_eq!(installed_kin(Path::new(&ge_old), &tools), Some(ge_new));
+        assert_eq!(installed_kin(Path::new(&newer), &tools), Some(cachy));
+        let valve = proton("heroic/Proton 9.0", Some("1700000000 proton-9.0-4"));
+        assert_eq!(installed_kin(Path::new(&valve), &tools), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn release(names: &[&str]) -> Release {
         Release {

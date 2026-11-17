@@ -466,14 +466,15 @@ async fn upload<R: Runtime>(app: &AppHandle<R>, game: &LibraryGame, local: &Loca
     Ok(())
 }
 
-/* ── a game brought over from Hydra ─────────────────────────────────── */
+/* ── a game brought over from another launcher ─────────────────────── */
 
-/// Right after a game is brought over from Hydra: its saves become versions
-/// here at once. First the backup Hydra left (Ludusavi's, under
-/// `hydralauncher/Backups/<shop>-<objectId>`), as an older version of its own,
-/// then the saves on this PC now, found the way every backup finds them.
-/// Everything of Hydra's is only read. Returns how many versions were made.
-pub async fn bring_from_hydra<R: Runtime>(app: &AppHandle<R>, id: &str, hydra_backup: Option<PathBuf>) -> Result<usize, String> {
+/// Right after a game is brought over from another launcher: its saves
+/// become versions here at once. First a backup the launcher left, when there
+/// is one (Hydra's: Ludusavi's, under `hydralauncher/Backups/<shop>-<objectId>`),
+/// as an older version of its own, then the saves on this PC now, found the
+/// way every backup finds them. Everything of the launcher's is only read.
+/// Returns how many versions were made.
+pub async fn bring_over<R: Runtime>(app: &AppHandle<R>, id: &str, hydra_backup: Option<PathBuf>) -> Result<usize, String> {
     if !super::enabled(app) {
         return Ok(0);
     }

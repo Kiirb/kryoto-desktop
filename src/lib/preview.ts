@@ -1202,6 +1202,7 @@ Object.assign(HANDLERS, {
   }),
   bridge_launchers: () => [
     { id: 'hydra', name: 'Hydra', dir: 'C:\\Users\\you\\AppData\\Roaming\\hydralauncher\\hydra-db', running: false, keeps: false, exports: false },
+    { id: 'heroic', name: 'Heroic', dir: 'C:\\Users\\you\\AppData\\Roaming\\heroic', running: false, keeps: false, exports: false },
     { id: 'steam', name: 'Steam', dir: 'C:\\Program Files (x86)\\Steam', running: false, keeps: true, exports: true },
   ],
   bridge_detect: (a: Record<string, unknown>) => ({ id: a.launcherId, name: String(a.launcherId), dir: a.dir, running: false, keeps: a.launcherId === 'steam', exports: a.launcherId === 'steam' }),
@@ -1224,7 +1225,7 @@ Object.assign(HANDLERS, {
       { key: 'steam:504230', title: 'Celeste', playtimeSeconds: 900, lastPlayed: null, executable: null, cover: null, kind: 'missing', options: [], how: null, joins: null, remembered: false },
     ],
   }),
-  bridge_import: (a: Record<string, unknown>) => ({ linked: 1, own: (a.decisions as { slug: string | null }[]).filter((d) => !d.slug).length, joined: 0, seconds: 52_200 }),
+  bridge_import: (a: Record<string, unknown>) => ({ linked: 1, own: (a.decisions as { slug: string | null }[]).filter((d) => !d.slug).length, joined: 0, seconds: 52_200, saves: false, note: null }),
   library_merge_offers: () => [],
   store_report_carry: () => null,
   playtime_offer: (a: Record<string, unknown>) => (a.id === games[0]?.id && !games[0]?.playtimePrompt ? { seconds: 45_900, source: 'folder' } : null),

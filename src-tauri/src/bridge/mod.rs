@@ -5,10 +5,10 @@
 //! [`PROVIDERS`]: where it keeps its data, whether it is open, and what games
 //! it has; and, when games can go out to it, [`Export`]. Everything else
 //! is here and shared: the review before anything is written, the merge rules,
-//! remembered answers, reports. Adding Epic, GOG, Heroic or Playnite is a new
-//! file and a line in that list.
+//! remembered answers, reports. Adding Epic, GOG or Playnite is a new file
+//! and a line in that list.
 //!
-//! Two kinds of launcher. One that hands its games over (Hydra): each game is
+//! Two kinds of launcher. One that hands its games over (Hydra, Heroic): each game is
 //! matched on this PC against Kryoto's match index
 //! (`/api/desktop/match-index`, downloaded whole and kept for a few hours, so
 //! nothing about the player's games is sent anywhere to be looked up), a
@@ -25,6 +25,7 @@
 //! Steam AppID, or a sure match by exe or title), `library_merge_offers`
 //! names it and the player says yes or no once.
 
+mod heroic;
 mod hydra;
 mod steam;
 
@@ -43,7 +44,7 @@ const OWN: &str = "own";
 pub(crate) const INDEX_MAX_AGE: u64 = 6 * 3600;
 
 /// Every launcher Bridge knows.
-static PROVIDERS: &[&dyn Provider] = &[&hydra::Hydra, &steam::Steam];
+static PROVIDERS: &[&dyn Provider] = &[&hydra::Hydra, &heroic::Heroic, &steam::Steam];
 
 /* ── a launcher ────────────────────────────────────────────────────── */
 
@@ -102,15 +103,24 @@ pub(crate) trait Provider: Sync {
     fn launch_url(&self, _game: &Incoming) -> Option<String> {
         None
     }
-    /// Games just came over (their library ids and keys): anything more to bring.
-    /// True when more is on its way to them (saves).
-    fn brought_over(&self, _app: &AppHandle, _dir: &Path, _games: Vec<BroughtOver>) -> bool {
-        false
+    /// Games just came over (their library ids and keys): anything more to
+    /// bring, such as their saves, which may still be on its way.
+    fn brought_over(&self, _app: &AppHandle, _dir: &Path, _games: Vec<BroughtOver>) -> Following {
+        Following::default()
     }
     /// Games can also go out to it.
     fn export(&self) -> Option<&dyn Export> {
         None
     }
+}
+
+/// What is still coming to games that just came over.
+#[derive(Default)]
+pub(crate) struct Following {
+    /// Save versions are on, and their saves are being kept as versions.
+    pub saves: bool,
+    /// Anything more, as the player reads it.
+    pub note: Option<String>,
 }
 
 /// A game that just came over.
@@ -545,6 +555,8 @@ pub struct Imported {
     /// Save versions are on, so the games' saves are being kept as versions
     /// now (the launcher's own backup too, when it left one).
     pub saves: bool,
+    /// What else is still coming over, from that launcher.
+    pub note: Option<String>,
 }
 
 /// A library entry from the launcher's copy, before any kryo.to link.
@@ -574,6 +586,30 @@ fn from_incoming(provider: &str, h: &Incoming, custom_cover: Option<String>, cus
         carry_seconds: h.playtime_seconds,
         ..Default::default()
     })
+}
+
+/// Each game's Proton as one this setup has, so a game brought over runs
+/// from Kryoto's Proton, not from a copy inside the other launcher: the same
+/// build when it is here (`compat::installed_twin`), else the newest here of
+/// the same line (`compat::installed_kin`: GE for GE, CachyOS for CachyOS).
+/// A Proton with nothing like it here stays the other launcher's.
+fn with_protons_here(p: &dyn Provider, mut incoming: Vec<Incoming>, tools: &[crate::compat::CompatTool]) -> Vec<Incoming> {
+    for h in incoming.iter_mut() {
+        let Some(theirs) = h.proton_path.clone() else { continue };
+        let at = Path::new(&theirs);
+        let (here, how) = match crate::compat::installed_twin(at, tools) {
+            Some(same) => (same, "the same Proton"),
+            None => match crate::compat::installed_kin(at, tools) {
+                Some(kin) => (kin, "a Proton of the same line"),
+                None => continue,
+            },
+        };
+        if here != theirs {
+            crate::logging::info("bridge", &format!("{}: {}: {how} is here, {here} instead of {theirs}", p.id(), h.title));
+            h.proton_path = Some(here);
+        }
+    }
+    incoming
 }
 
 /// An entry for a game that stays in its launcher: Play opens `link`. Its
@@ -646,6 +682,7 @@ pub async fn bridge_import(app: AppHandle, launcher_id: String, dir: Option<Stri
     if p.keeps_games() {
         return import_kept(&app, p, incoming, decisions).await;
     }
+    let incoming = with_protons_here(p, incoming, &crate::compat::detect(&app));
     let index = match_index(&app, INDEX_MAX_AGE).await;
     let endpoint = crate::settings::catalog_endpoint(&crate::settings::load(&app));
     let client = crate::net::builder()
@@ -769,7 +806,9 @@ pub async fn bridge_import(app: AppHandle, launcher_id: String, dir: Option<Stri
         .into_iter()
         .filter_map(|(id, key)| games.iter().find(|g| g.id == id).map(|g| BroughtOver { id, title: g.title.clone(), key }))
         .collect();
-    out.saves = p.brought_over(&app, &root, brought);
+    let following = p.brought_over(&app, &root, brought);
+    out.saves = following.saves;
+    out.note = following.note;
     Ok(out)
 }
 
@@ -1010,7 +1049,7 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), PROVIDERS.len());
-        assert!(provider("hydra").is_ok() && provider("steam").is_ok() && provider("../x").is_err());
+        assert!(provider("hydra").is_ok() && provider("heroic").is_ok() && provider("steam").is_ok() && provider("../x").is_err());
         assert!(provider("steam").unwrap().export().is_some() && provider("hydra").unwrap().export().is_none());
     }
 

@@ -568,8 +568,8 @@ function Stage({
         <Words
           title="Your games are here"
           text={`${parts.join(', ')}.${imported.seconds ? ` ${formatPlaytime(imported.seconds)} of play time came along.` : ''} ${
-            imported.saves ? `Their saves are being kept as versions now, ${name}'s own backup too.` : 'Turn on save versions in Settings > Cloud to keep their saves.'
-          } Your own games stay on this PC: if Kryoto adds one later, it asks you once whether to link it.`}
+            imported.saves ? 'Their saves are being kept as versions now.' : 'Turn on save versions in Settings > Cloud to keep their saves.'
+          }${imported.note ? ` ${imported.note}` : ''} Your own games stay on this PC: if Kryoto adds one later, it asks you once whether to link it.`}
         />
       </>
     )
