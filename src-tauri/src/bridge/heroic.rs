@@ -171,6 +171,7 @@ async fn bring_prefix(app: &AppHandle, g: &BroughtOver, w: &he::Wine) -> Result<
 }
 
 /// Room kept free on the drive besides the prefix itself.
+#[cfg(unix)]
 const MARGIN: u64 = 1 << 30;
 
 /// The whole prefix, into a folder beside `to` and then renamed, so a copy
